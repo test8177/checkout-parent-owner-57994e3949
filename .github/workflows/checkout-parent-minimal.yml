@@ -1,0 +1,49 @@
+name: checkout-parent-minimal-dispatch
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  containment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out lower repository strictly as data
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: StealthyBugs/checkout-parent-data-57994e3949
+          ref: ceb28c7fd207f921901bfc3f9574c9ff99c351cb
+          path: lower-data
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Verify sole lower-tree symlink and create protected canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -L "$GITHUB_WORKSPACE/lower-data/parent-link"
+          test "$(readlink "$GITHUB_WORKSPACE/lower-data/parent-link")" = '../../../checkout-protected-57994e3949'
+          outside="$(dirname "$(dirname "$GITHUB_WORKSPACE")")/checkout-protected-57994e3949"
+          test "$(realpath "$GITHUB_WORKSPACE/lower-data/parent-link")" = "$outside"
+          mkdir -p "$outside/destination"
+          printf %s '+z1NbbzDmYElbWfWdKXaCovFOVnrMqY6Kcu6GGY4qMI=' | base64 -d > "$outside/destination/protected-canary.bin"
+      - id: second_checkout
+        name: Owner-fixed checkout beneath lower-controlled parent symlink
+        continue-on-error: true
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: ${{ github.repository }}
+          ref: main
+          path: lower-data/parent-link/destination
+          persist-credentials: false
+          set-safe-directory: false
+      - name: Owner realpath and tree readback
+        if: always()
+        shell: bash
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.second_checkout.outcome }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os
+          ws=os.environ['GITHUB_WORKSPACE']; outside=os.path.dirname(os.path.dirname(ws))+'/checkout-protected-57994e3949'; lexical=ws+'/lower-data/parent-link/destination'; canary=outside+'/destination/protected-canary.bin'; h=lambda p:hashlib.sha256(open(p,'rb').read()).hexdigest()
+          value={'checkout_outcome':os.environ.get('CHECKOUT_OUTCOME'),'link_is_symlink':os.path.islink(ws+'/lower-data/parent-link'),'lexical_realpath_sha256':hashlib.sha256(os.path.realpath(lexical).encode()).hexdigest(),'outside_realpath_sha256':hashlib.sha256((outside+'/destination').encode()).hexdigest(),'realpath_matches_outside':os.path.realpath(lexical)==outside+'/destination','canary_exists_after':os.path.isfile(canary),'canary_sha256_after':h(canary) if os.path.isfile(canary) else None,'outside_git_exists':os.path.isdir(outside+'/destination/.git'),'outside_workflow_exists':os.path.isfile(outside+'/destination/.github/workflows/checkout-parent-minimal.yml'),'lower_tree_script_executed':False,'command_execution':False}
+          print('CHECKOUT_PARENT_PROJECTION '+json.dumps(value,sort_keys=True,separators=(',',':')))
+          PY
